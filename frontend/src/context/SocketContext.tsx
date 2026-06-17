@@ -20,8 +20,13 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (import.meta.env.VITE_API_BASE_URL) {
         return import.meta.env.VITE_API_BASE_URL.replace(/\/api$/, '');
       }
-      if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        return '/_/backend';
+      try {
+        const hostname = window.location.hostname;
+        if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+          return '/_/backend';
+        }
+      } catch (e) {
+        // Fallback if window is not defined
       }
       return 'http://localhost:5000';
     };
