@@ -80,7 +80,11 @@ export const TrackQueue: React.FC = () => {
   useEffect(() => {
     if (!queueId || !socket) return;
 
-    socket.emit('join_queue', { queueId });
+    const joinRoom = () => socket.emit('join_queue', { queueId });
+
+    joinRoom();
+    // Re-join room after Render cold start reconnect
+    socket.on('connect', joinRoom);
 
     const handleQueueUpdated = (payload: { queueId: string }) => {
       if (payload.queueId === queueId) {
@@ -92,6 +96,7 @@ export const TrackQueue: React.FC = () => {
 
     return () => {
       socket.emit('leave_queue', { queueId });
+      socket.off('connect', joinRoom);
       socket.off('queue_updated', handleQueueUpdated);
     };
   }, [queueId, socket]);

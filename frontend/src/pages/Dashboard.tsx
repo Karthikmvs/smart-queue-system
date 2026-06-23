@@ -4,9 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import { apiRequest } from '../services/api';
 import { QRCodeSVG } from 'qrcode.react';
-import { 
-  Users, Plus, LogOut, Play, CheckCircle2, 
-  XCircle, Clock, Volume2, UserCheck, Copy, Check, Trash2 
+import {
+  Users, Plus, LogOut, Play, CheckCircle2,
+  XCircle, Clock, Volume2, UserCheck, Copy, Check, Trash2, RotateCcw
 } from 'lucide-react';
 
 interface Queue {
@@ -46,14 +46,13 @@ export const Dashboard: React.FC = () => {
   const [selectedQueue, setSelectedQueue] = useState<Queue | null>(null);
   const [entries, setEntries] = useState<QueueEntry[]>([]);
   const [activeTab, setActiveTab] = useState<'active' | 'history'>('active');
-  
+
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [newQueueName, setNewQueueName] = useState('');
-  const [newQueueCode, setNewQueueCode] = useState('');
   const [newServiceTime, setNewServiceTime] = useState(5);
   const [modalError, setModalError] = useState<string | null>(null);
-  
+
   // Copy state
   const [copied, setCopied] = useState(false);
 
@@ -63,19 +62,24 @@ export const Dashboard: React.FC = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Reset queue states
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [queueToReset, setQueueToReset] = useState<Queue | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+
   const fetchQueues = useCallback(async () => {
     try {
       const data = await apiRequest('/queues');
       setQueues(data);
-      // Update selected queue stats if it's already selected
-      if (selectedQueue) {
-        const updated = data.find((q: Queue) => q._id === selectedQueue._id);
-        if (updated) setSelectedQueue(updated);
-      }
+      setSelectedQueue((prev) => {
+        if (!prev) return prev;
+        const updated = data.find((q: Queue) => q._id === prev._id);
+        return updated ?? prev;
+      });
     } catch (err) {
       console.error('Error fetching queues:', err);
     }
-  }, [selectedQueue]);
+  }, []);
 
   const fetchEntries = useCallback(async (queueId: string) => {
     try {
@@ -86,41 +90,39 @@ export const Dashboard: React.FC = () => {
     }
   }, []);
 
-  // Fetch queues on mount
   useEffect(() => {
     fetchQueues();
-  }, []); // Run once on mount
+  }, []);
 
-  // Selected queue watcher: join room and load entries
+  // Socket effect — deps use selectedQueue._id (string) not the full object to avoid re-runs on every stats update
   useEffect(() => {
-    if (!selectedQueue || !socket) return;
+    const queueId = selectedQueue?._id;
+    if (!queueId || !socket) return;
 
-    const queueId = selectedQueue._id;
     fetchEntries(queueId);
-
-    // Join room
     socket.emit('join_queue', { queueId });
 
-    // Handle updates
+    // Re-join room after Render cold start reconnect
+    const handleReconnect = () => {
+      socket.emit('join_queue', { queueId });
+    };
+
     const handleQueueUpdated = (data: { queueId: string }) => {
       if (data.queueId === queueId) {
         fetchEntries(queueId);
-        // Refresh queue stats in list
-        apiRequest('/queues').then((qs) => {
-          setQueues(qs);
-          const updated = qs.find((q: Queue) => q._id === queueId);
-          if (updated) setSelectedQueue(updated);
-        });
+        fetchQueues();
       }
     };
 
+    socket.on('connect', handleReconnect);
     socket.on('queue_updated', handleQueueUpdated);
 
     return () => {
       socket.emit('leave_queue', { queueId });
+      socket.off('connect', handleReconnect);
       socket.off('queue_updated', handleQueueUpdated);
     };
-  }, [selectedQueue, socket, fetchEntries]);
+  }, [selectedQueue?._id, socket]);
 
   const handleCreateQueue = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,7 +131,6 @@ export const Dashboard: React.FC = () => {
     try {
       const created = await apiRequest('/queues', 'POST', {
         queueName: newQueueName,
-        queueCode: newQueueCode,
         averageServiceTime: newServiceTime,
       });
 
@@ -137,7 +138,6 @@ export const Dashboard: React.FC = () => {
       setSelectedQueue(created);
       setIsModalOpen(false);
       setNewQueueName('');
-      setNewQueueCode('');
       setNewServiceTime(5);
     } catch (err: any) {
       setModalError(err.message || 'Failed to create queue');
@@ -153,6 +153,7 @@ export const Dashboard: React.FC = () => {
       setQueues((prev) => prev.filter((q) => q._id !== queueToDelete._id));
       if (selectedQueue && selectedQueue._id === queueToDelete._id) {
         setSelectedQueue(null);
+        setEntries([]);
       }
       setIsDeleteModalOpen(false);
       setQueueToDelete(null);
@@ -163,11 +164,25 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const handleResetQueue = async () => {
+    if (!queueToReset) return;
+    setIsResetting(true);
+    try {
+      await apiRequest(`/queues/${queueToReset._id}/reset`, 'POST');
+      setIsResetModalOpen(false);
+      setQueueToReset(null);
+      // Socket will trigger refresh via queue_updated
+    } catch (err) {
+      console.error('Error resetting queue:', err);
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const handleCallNext = async () => {
     if (!selectedQueue) return;
     try {
       await apiRequest(`/entries/queue/${selectedQueue._id}/call-next`, 'POST');
-      // Sockets will trigger refresh
     } catch (err) {
       console.error('Error calling next customer:', err);
     }
@@ -176,7 +191,6 @@ export const Dashboard: React.FC = () => {
   const handleUpdateStatus = async (id: string, status: 'served' | 'skipped') => {
     try {
       await apiRequest(`/entries/${id}/status`, 'PATCH', { status });
-      // Sockets will trigger refresh
     } catch (err) {
       console.error(`Error updating entry to ${status}:`, err);
     }
@@ -206,15 +220,10 @@ export const Dashboard: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getJoinUrl = (code: string) => {
-    return `${window.location.origin}/join/${code}`;
-  };
+  const getJoinUrl = (code: string) => `${window.location.origin}/join/${code}`;
 
-  // Separate active vs historical entries
   const activeEntries = entries.filter((e) => ['waiting', 'called'].includes(e.status));
   const historyEntries = entries.filter((e) => ['served', 'skipped'].includes(e.status)).reverse();
-
-  // Find currently serving entry (called status)
   const currentServingEntry = entries.find((e) => e.status === 'called');
 
   return (
@@ -247,7 +256,7 @@ export const Dashboard: React.FC = () => {
         {/* Sidebar: Queue List */}
         <aside className="w-full md:w-80 border-r border-white/5 bg-[#090d16]/30 flex flex-col shrink-0">
           <div className="p-4 border-b border-white/5 flex items-center justify-between">
-            <h3 className="text-white font-bold text-sm uppercase tracking-wider text-gray-400">Waiting Queues</h3>
+            <h3 className="text-white font-bold text-sm uppercase tracking-wider text-gray-400">My Queues</h3>
             <button
               onClick={() => setIsModalOpen(true)}
               className="p-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white transition flex items-center justify-center"
@@ -260,22 +269,19 @@ export const Dashboard: React.FC = () => {
           <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {queues.length === 0 ? (
               <div className="text-center py-8 text-gray-650 text-xs">
-                No queues created yet. Click "+" to create one.
+                No queues yet. Click "+" to create one.
               </div>
             ) : (
               queues.map((q) => {
                 const isSelected = selectedQueue?._id === q._id;
                 return (
-                  <div
-                    key={q._id}
-                    className="group relative"
-                  >
+                  <div key={q._id} className="group relative">
                     <button
                       onClick={() => {
                         setSelectedQueue(q);
                         setActiveTab('active');
                       }}
-                      className={`w-full text-left p-4 pr-12 rounded-2xl border transition duration-200 flex flex-col gap-2 ${
+                      className={`w-full text-left p-4 pr-20 rounded-2xl border transition duration-200 flex flex-col gap-2 ${
                         isSelected
                           ? 'bg-brand-500/10 border-brand-500/40 text-white shadow-lg shadow-brand-500/5'
                           : 'bg-white/5 border-white/5 hover:border-white/15 text-gray-400 hover:text-gray-200'
@@ -295,17 +301,32 @@ export const Dashboard: React.FC = () => {
                         </div>
                       </div>
                     </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setQueueToDelete(q);
-                        setIsDeleteModalOpen(true);
-                      }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-xl bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition duration-150 opacity-100 md:opacity-0 group-hover:opacity-100 focus:opacity-100"
-                      title="Delete Queue"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+
+                    {/* Reset + Delete buttons */}
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1 opacity-100 md:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQueueToReset(q);
+                          setIsResetModalOpen(true);
+                        }}
+                        className="p-2 rounded-xl bg-transparent hover:bg-amber-500/10 text-gray-500 hover:text-amber-400 transition duration-150"
+                        title="Reset Queue (new day)"
+                      >
+                        <RotateCcw className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setQueueToDelete(q);
+                          setIsDeleteModalOpen(true);
+                        }}
+                        className="p-2 rounded-xl bg-transparent hover:bg-red-500/10 text-gray-500 hover:text-red-400 transition duration-150"
+                        title="Delete Queue"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 );
               })
@@ -317,12 +338,12 @@ export const Dashboard: React.FC = () => {
         <main className="flex-1 overflow-y-auto bg-[#070a13] p-6">
           {selectedQueue ? (
             <div className="max-w-6xl mx-auto space-y-6">
-              {/* Header card with details */}
+              {/* Header card */}
               <div className="flex flex-col lg:flex-row gap-6">
                 {/* Stats & Controls */}
                 <div className="flex-1 glass p-6 rounded-3xl flex flex-col justify-between relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-64 h-64 bg-brand-500/5 rounded-full blur-3xl pointer-events-none" />
-                  
+
                   <div>
                     <div className="flex items-start justify-between">
                       <div>
@@ -334,7 +355,6 @@ export const Dashboard: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Prominent Current Serving Banner */}
                     <div className="mt-6 bg-white/5 border border-white/5 rounded-2xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
                       <div>
                         <span className="text-gray-500 text-xs font-semibold uppercase tracking-wider block">Now Serving</span>
@@ -347,13 +367,13 @@ export const Dashboard: React.FC = () => {
                           </span>
                         )}
                       </div>
-                      
+
                       <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
                         {currentServingEntry && (
                           <button
                             onClick={playChime}
                             className="p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-300 transition flex items-center justify-center"
-                            title="Voice Announcement Call"
+                            title="Voice Announcement"
                           >
                             <Volume2 className="w-5 h-5" />
                           </button>
@@ -369,7 +389,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Summary row */}
                   <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/5 text-center">
                     <div>
                       <div className="text-gray-500 text-xs">Waiting</div>
@@ -389,9 +408,9 @@ export const Dashboard: React.FC = () => {
                 {/* QR Section */}
                 <div className="w-full lg:w-80 glass p-6 rounded-3xl flex flex-col items-center justify-between gap-4 text-center">
                   <span className="text-gray-400 text-xs font-semibold uppercase tracking-wider">Queue QR Code</span>
-                  <div className="bg-white p-4 rounded-2xl shadow-inner inline-block relative border border-white/10">
-                    <QRCodeSVG 
-                      value={getJoinUrl(selectedQueue.queueCode)} 
+                  <div className="bg-white p-4 rounded-2xl shadow-inner inline-block border border-white/10">
+                    <QRCodeSVG
+                      value={getJoinUrl(selectedQueue.queueCode)}
                       size={150}
                       level="H"
                       includeMargin={false}
@@ -406,13 +425,9 @@ export const Dashboard: React.FC = () => {
                       className="w-full py-2 bg-white/5 border border-white/10 hover:bg-white/10 text-gray-300 hover:text-white rounded-xl transition text-xs font-semibold flex items-center justify-center gap-1.5"
                     >
                       {copied ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" /> Copied link
-                        </>
+                        <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied link</>
                       ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" /> Copy Join Link
-                        </>
+                        <><Copy className="w-3.5 h-3.5" /> Copy Join Link</>
                       )}
                     </button>
                   </div>
@@ -421,14 +436,11 @@ export const Dashboard: React.FC = () => {
 
               {/* Table section */}
               <div className="glass rounded-3xl overflow-hidden border border-white/10">
-                {/* Tabs */}
                 <div className="flex border-b border-white/5 bg-[#090d16]/30 px-6 py-2">
                   <button
                     onClick={() => setActiveTab('active')}
                     className={`px-4 py-3 text-sm font-semibold transition border-b-2 -mb-2.5 ${
-                      activeTab === 'active'
-                        ? 'border-brand-500 text-white'
-                        : 'border-transparent text-gray-500 hover:text-gray-300'
+                      activeTab === 'active' ? 'border-brand-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
                     }`}
                   >
                     Active Customers ({activeEntries.length})
@@ -436,22 +448,17 @@ export const Dashboard: React.FC = () => {
                   <button
                     onClick={() => setActiveTab('history')}
                     className={`px-4 py-3 text-sm font-semibold transition border-b-2 -mb-2.5 ${
-                      activeTab === 'history'
-                        ? 'border-brand-500 text-white'
-                        : 'border-transparent text-gray-500 hover:text-gray-300'
+                      activeTab === 'history' ? 'border-brand-500 text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
                     }`}
                   >
                     Serve History ({historyEntries.length})
                   </button>
                 </div>
 
-                {/* Table Content */}
                 <div className="overflow-x-auto">
                   {activeTab === 'active' ? (
                     activeEntries.length === 0 ? (
-                      <div className="text-center py-12 text-gray-650 text-sm">
-                        No active customers waiting in queue.
-                      </div>
+                      <div className="text-center py-12 text-gray-650 text-sm">No active customers waiting in queue.</div>
                     ) : (
                       <table className="w-full text-left text-sm text-gray-400">
                         <thead className="text-xs uppercase tracking-wider text-gray-500 bg-white/2">
@@ -465,25 +472,19 @@ export const Dashboard: React.FC = () => {
                         </thead>
                         <tbody className="divide-y divide-white/5">
                           {activeEntries.map((entry) => (
-                            <tr 
-                              key={entry._id} 
-                              className={`hover:bg-white/2 transition duration-150 ${
-                                entry.status === 'called' ? 'bg-brand-500/5' : ''
-                              }`}
+                            <tr
+                              key={entry._id}
+                              className={`hover:bg-white/2 transition duration-150 ${entry.status === 'called' ? 'bg-brand-500/5' : ''}`}
                             >
-                              <td className="px-6 py-4 font-mono font-bold text-white text-base">
-                                {entry.token}
-                              </td>
-                              <td className="px-6 py-4 font-semibold text-white">
-                                {entry.customerName}
-                              </td>
+                              <td className="px-6 py-4 font-mono font-bold text-white text-base">{entry.token}</td>
+                              <td className="px-6 py-4 font-semibold text-white">{entry.customerName}</td>
                               <td className="px-6 py-4 text-xs">
                                 {new Date(entry.joinedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </td>
                               <td className="px-6 py-4">
                                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  entry.status === 'called' 
-                                    ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20 animate-pulse' 
+                                  entry.status === 'called'
+                                    ? 'bg-brand-500/10 text-brand-400 border border-brand-500/20 animate-pulse'
                                     : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
                                 }`}>
                                   <span className={`w-1.5 h-1.5 rounded-full ${entry.status === 'called' ? 'bg-brand-400' : 'bg-amber-400'}`}></span>
@@ -533,9 +534,7 @@ export const Dashboard: React.FC = () => {
                     )
                   ) : (
                     historyEntries.length === 0 ? (
-                      <div className="text-center py-12 text-gray-650 text-sm">
-                        No served or skipped customers in history.
-                      </div>
+                      <div className="text-center py-12 text-gray-650 text-sm">No served or skipped customers in history.</div>
                     ) : (
                       <table className="w-full text-left text-sm text-gray-400">
                         <thead className="text-xs uppercase tracking-wider text-gray-500 bg-white/2">
@@ -549,22 +548,17 @@ export const Dashboard: React.FC = () => {
                         <tbody className="divide-y divide-white/5">
                           {historyEntries.map((entry) => (
                             <tr key={entry._id} className="hover:bg-white/2 transition duration-150">
-                              <td className="px-6 py-4 font-mono font-semibold text-gray-300">
-                                {entry.token}
-                              </td>
-                              <td className="px-6 py-4 font-semibold text-gray-300">
-                                {entry.customerName}
-                              </td>
+                              <td className="px-6 py-4 font-mono font-semibold text-gray-300">{entry.token}</td>
+                              <td className="px-6 py-4 font-semibold text-gray-300">{entry.customerName}</td>
                               <td className="px-6 py-4 text-xs">
-                                {entry.servedAt 
+                                {entry.servedAt
                                   ? new Date(entry.servedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                                  : '---'
-                                }
+                                  : '---'}
                               </td>
                               <td className="px-6 py-4">
                                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                                  entry.status === 'served' 
-                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                  entry.status === 'served'
+                                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                                     : 'bg-red-500/10 text-red-400 border border-red-500/20'
                                 }`}>
                                   {entry.status === 'served' ? 'Served' : 'Skipped'}
@@ -586,7 +580,7 @@ export const Dashboard: React.FC = () => {
               </div>
               <h2 className="text-xl font-bold text-white">Select a Queue</h2>
               <p className="text-gray-550 text-sm mt-2">
-                Click on one of the queues in the sidebar to open the live management dashboard, or click the "+" button to add a new service counter.
+                Click on one of your queues in the sidebar to open the live management dashboard, or click "+" to create a new one.
               </p>
               <button
                 onClick={() => setIsModalOpen(true)}
@@ -602,9 +596,9 @@ export const Dashboard: React.FC = () => {
       {/* Create Queue Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-          <div className="glass w-full max-w-md p-6 rounded-3xl border border-white/10 relative">
+          <div className="glass w-full max-w-md p-6 rounded-3xl border border-white/10">
             <h3 className="text-xl font-bold text-white mb-6">Create New Queue</h3>
-            
+
             {modalError && (
               <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
                 {modalError}
@@ -619,28 +613,10 @@ export const Dashboard: React.FC = () => {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. General Banking"
+                  placeholder="e.g. General Banking Counter"
                   value={newQueueName}
-                  onChange={(e) => {
-                    setNewQueueName(e.target.value);
-                    // Generate a default code slug
-                    setNewQueueCode(e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''));
-                  }}
+                  onChange={(e) => setNewQueueName(e.target.value)}
                   className="w-full bg-white/5 border border-white/10 focus:border-brand-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 outline-none text-sm transition"
-                />
-              </div>
-
-              <div>
-                <label className="block text-gray-400 text-xs font-semibold uppercase tracking-wider mb-2">
-                  Queue Code (URL slug)
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. general-banking"
-                  value={newQueueCode}
-                  onChange={(e) => setNewQueueCode(e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''))}
-                  className="w-full bg-white/5 border border-white/10 focus:border-brand-500 rounded-xl px-4 py-2.5 text-white placeholder-gray-600 outline-none text-sm transition font-mono"
                 />
               </div>
 
@@ -659,10 +635,12 @@ export const Dashboard: React.FC = () => {
                 />
               </div>
 
+              <p className="text-gray-500 text-xs">A unique queue code will be auto-generated for customers to join.</p>
+
               <div className="flex gap-3 pt-4 border-t border-white/5 mt-6 justify-end">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => { setIsModalOpen(false); setModalError(null); }}
                   className="px-4 py-2 text-sm font-semibold text-gray-400 hover:text-white transition bg-transparent hover:bg-white/5 rounded-xl"
                 >
                   Cancel
@@ -679,15 +657,46 @@ export const Dashboard: React.FC = () => {
         </div>
       )}
 
+      {/* Reset Queue Confirmation Modal */}
+      {isResetModalOpen && queueToReset && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+          <div className="glass w-full max-w-md p-6 rounded-3xl border border-white/10">
+            <h3 className="text-xl font-bold text-white mb-2">Reset Queue</h3>
+            <p className="text-gray-400 text-sm mb-6">
+              Reset <span className="text-white font-semibold">"{queueToReset.queueName}"</span> for a new day? This clears all customer entries and resets token numbers back to 001. The queue code stays the same.
+            </p>
+
+            <div className="flex gap-3 pt-4 border-t border-white/5 justify-end">
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={() => { setIsResetModalOpen(false); setQueueToReset(null); }}
+                className="px-4 py-2 text-sm font-semibold text-gray-400 hover:text-white transition bg-transparent hover:bg-white/5 rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={handleResetQueue}
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-sm rounded-xl transition shadow-lg shadow-amber-600/25"
+              >
+                {isResetting ? 'Resetting...' : 'Reset Queue'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Delete Queue Confirmation Modal */}
       {isDeleteModalOpen && queueToDelete && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-          <div className="glass w-full max-w-md p-6 rounded-3xl border border-white/10 relative">
+          <div className="glass w-full max-w-md p-6 rounded-3xl border border-white/10">
             <h3 className="text-xl font-bold text-white mb-2">Delete Queue</h3>
             <p className="text-gray-400 text-sm mb-6">
-              Are you sure you want to delete the queue <span className="text-white font-semibold">"{queueToDelete.queueName}"</span>? This will permanently delete all associated entries and history.
+              Are you sure you want to delete <span className="text-white font-semibold">"{queueToDelete.queueName}"</span>? This permanently deletes all entries and history.
             </p>
-            
+
             {deleteError && (
               <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
                 {deleteError}
@@ -698,11 +707,7 @@ export const Dashboard: React.FC = () => {
               <button
                 type="button"
                 disabled={isDeleting}
-                onClick={() => {
-                  setIsDeleteModalOpen(false);
-                  setQueueToDelete(null);
-                  setDeleteError(null);
-                }}
+                onClick={() => { setIsDeleteModalOpen(false); setQueueToDelete(null); setDeleteError(null); }}
                 className="px-4 py-2 text-sm font-semibold text-gray-400 hover:text-white transition bg-transparent hover:bg-white/5 rounded-xl"
               >
                 Cancel
