@@ -1,5 +1,5 @@
 import express from 'express';
-import { joinQueue, getEntryByToken, getQueueEntries, updateEntryStatus, callNext } from '../controllers/entryController';
+import { joinQueue, getEntryByToken, getQueueEntries, updateEntryStatus, callNext, callSpecific } from '../controllers/entryController';
 import { protect } from '../middleware/authMiddleware';
 
 const router = express.Router();
@@ -12,5 +12,6 @@ router.get('/track/:token', getEntryByToken);
 router.get('/queue/:queueId', protect, getQueueEntries);
 router.patch('/:id/status', protect, updateEntryStatus);
 router.post('/queue/:queueId/call-next', protect, callNext);
+router.post('/:id/call', protect, callSpecific);
 
 export default router;

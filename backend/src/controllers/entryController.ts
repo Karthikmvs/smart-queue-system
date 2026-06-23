@@ -12,6 +12,12 @@ export const joinQueue = async (req: Request, res: Response) => {
     if (!customerName || customerName.trim() === '') {
       return res.status(400).json({ message: 'Customer name is required' });
     }
+    if (customerName.trim().length < 2) {
+      return res.status(400).json({ message: 'Name must be at least 2 characters' });
+    }
+    if (customerName.trim().length > 60) {
+      return res.status(400).json({ message: 'Name must be 60 characters or less' });
+    }
 
     const queue = await Queue.findOne({ queueCode: code.toUpperCase() });
     if (!queue) {
@@ -211,6 +217,48 @@ export const callNext = async (req: AuthRequest, res: Response) => {
     }
 
     return res.json(nextEntry);
+  } catch (error) {
+    return res.status(500).json({ message: (error as Error).message });
+  }
+};
+
+export const callSpecific = async (req: AuthRequest, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    const entry = await QueueEntry.findById(id);
+    if (!entry) {
+      return res.status(404).json({ message: 'Queue entry not found' });
+    }
+
+    const queue = await Queue.findById(entry.queueId);
+    if (!queue || queue.createdBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    // Mark any currently called entry in this queue as served first
+    await QueueEntry.updateMany(
+      { queueId: entry.queueId, status: 'called' },
+      { status: 'served', servedAt: new Date() }
+    );
+
+    // Mark this entry as called
+    entry.status = 'called';
+    entry.calledAt = new Date();
+    await entry.save();
+
+    // Single socket emit — no double-refresh
+    const io = req.app.get('io');
+    if (io) {
+      io.to(entry.queueId.toString()).emit('queue_updated', { queueId: entry.queueId });
+      io.to(entry.queueId.toString()).emit('customer_called', {
+        queueId: entry.queueId,
+        token: entry.token,
+        customerName: entry.customerName,
+      });
+    }
+
+    return res.json(entry);
   } catch (error) {
     return res.status(500).json({ message: (error as Error).message });
   }

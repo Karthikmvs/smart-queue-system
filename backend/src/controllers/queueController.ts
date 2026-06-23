@@ -97,7 +97,11 @@ export const getQueueByCode = async (req: AuthRequest, res: Response) => {
     const currentServingEntry = await QueueEntry.findOne({ queueId: queue._id, status: 'called' }).sort({ calledAt: -1 });
 
     return res.json({
-      ...queue.toObject(),
+      _id: queue._id,
+      queueName: queue.queueName,
+      queueCode: queue.queueCode,
+      averageServiceTime: queue.averageServiceTime,
+      tokenPrefix: queue.tokenPrefix,
       waitingCount,
       currentServing: currentServingEntry ? currentServingEntry.token : 'None',
     });

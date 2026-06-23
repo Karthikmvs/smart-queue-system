@@ -513,10 +513,7 @@ export const Dashboard: React.FC = () => {
                                   <button
                                     onClick={async () => {
                                       try {
-                                        if (currentServingEntry) {
-                                          await apiRequest(`/entries/${currentServingEntry._id}/status`, 'PATCH', { status: 'served' });
-                                        }
-                                        await apiRequest(`/entries/${entry._id}/status`, 'PATCH', { status: 'called' });
+                                        await apiRequest(`/entries/${entry._id}/call`, 'POST');
                                       } catch (err) {
                                         console.error('Error calling customer:', err);
                                       }

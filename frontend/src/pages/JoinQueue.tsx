@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import { Users, Clock, ArrowRight, ShieldAlert } from 'lucide-react';
@@ -22,21 +22,36 @@ export const JoinQueue: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchQueueDetails = useCallback(async () => {
+    try {
+      if (!queueCode) return;
+      const data = await apiRequest(`/queues/public/${queueCode}`);
+      setQueue(data);
+      setError(null);
+    } catch (err: any) {
+      setError(err.message || 'Failed to retrieve queue details. Verify the URL or scan again.');
+      setQueue(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [queueCode]);
+
   useEffect(() => {
-    const fetchQueueDetails = async () => {
-      try {
-        if (!queueCode) return;
-        const data = await apiRequest(`/queues/public/${queueCode}`);
-        setQueue(data);
-      } catch (err: any) {
-        setError(err.message || 'Failed to retrieve queue details. Verify the URL or scan again.');
-      } finally {
-        setLoading(false);
-      }
-    };
+    if (!queueCode) return;
+
+    // If customer already has an active ticket for this queue, send them straight to tracking
+    const savedToken = localStorage.getItem(`last_token_${queueCode}`);
+    if (savedToken) {
+      navigate(`/track/${savedToken}?queue=${queueCode}`, { replace: true });
+      return;
+    }
 
     fetchQueueDetails();
-  }, [queueCode]);
+
+    // Refresh queue stats every 10 seconds so waiting count stays accurate
+    const interval = setInterval(fetchQueueDetails, 10000);
+    return () => clearInterval(interval);
+  }, [queueCode, fetchQueueDetails]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,11 +65,9 @@ export const JoinQueue: React.FC = () => {
         customerName: customerName.trim(),
       });
 
-      // Save token info to localStorage to auto-track next time if they close the tab
+      // Save token so customer can return to their ticket if they close the tab
       localStorage.setItem(`last_token_${queueCode}`, entry.token);
-      localStorage.setItem(`last_id_${queueCode}`, entry._id);
 
-      // Redirect to track page
       navigate(`/track/${entry.token}?queue=${queueCode}`);
     } catch (err: any) {
       setError(err.message || 'Error joining the queue. Please try again.');
@@ -73,7 +86,6 @@ export const JoinQueue: React.FC = () => {
 
   return (
     <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-[#090d16] px-4">
-      {/* Background Glow */}
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-brand-500/10 rounded-full blur-[120px] pointer-events-none" />
 
       <div className="w-full max-w-md z-10">
@@ -94,7 +106,6 @@ export const JoinQueue: React.FC = () => {
         ) : (
           queue && (
             <div className="space-y-6">
-              {/* Logo / Header */}
               <div className="text-center">
                 <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-brand-500/20 mx-auto mb-3">
                   <Users className="w-6 h-6 text-white" />
@@ -103,7 +114,6 @@ export const JoinQueue: React.FC = () => {
                 <p className="text-gray-400 text-sm mt-1 uppercase font-mono tracking-wide">Queue Code: {queue.queueCode}</p>
               </div>
 
-              {/* Statistics Panel */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="glass p-4 rounded-2xl border border-white/5 text-center">
                   <span className="text-gray-500 text-xs block font-semibold uppercase tracking-wider">Waiting in Line</span>
@@ -115,7 +125,6 @@ export const JoinQueue: React.FC = () => {
                 </div>
               </div>
 
-              {/* Form Card */}
               <div className="glass p-8 rounded-3xl border border-white/10 backdrop-blur-md">
                 {error && (
                   <div className="mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 text-sm">
@@ -125,7 +134,7 @@ export const JoinQueue: React.FC = () => {
 
                 <div className="flex items-center gap-2 text-xs text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-3 py-2 rounded-xl font-semibold mb-6">
                   <Clock className="w-4 h-4 shrink-0" />
-                  <span>Estimated Wait Time: <span className="text-white font-bold">{queue.waitingCount * queue.averageServiceTime} mins</span> ({queue.averageServiceTime}m per ticket)</span>
+                  <span>Estimated Wait: <span className="text-white font-bold">{queue.waitingCount * queue.averageServiceTime} mins</span> ({queue.averageServiceTime}m per ticket)</span>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-6">
@@ -137,6 +146,8 @@ export const JoinQueue: React.FC = () => {
                       id="name"
                       type="text"
                       required
+                      minLength={2}
+                      maxLength={60}
                       value={customerName}
                       onChange={(e) => setCustomerName(e.target.value)}
                       placeholder="e.g. John Doe"
@@ -154,7 +165,6 @@ export const JoinQueue: React.FC = () => {
                 </form>
               </div>
 
-              {/* Footer info */}
               <div className="text-center text-xs text-gray-500">
                 By joining, you will receive a digital token number to track your place in line on your phone screen.
               </div>

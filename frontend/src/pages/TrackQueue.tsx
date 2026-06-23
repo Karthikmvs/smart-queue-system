@@ -58,6 +58,11 @@ export const TrackQueue: React.FC = () => {
         triggerCallAlert(trackingData.entry.token, trackingData.entry.customerName);
       }
 
+      // Clear saved token once served/skipped so the join page doesn't auto-redirect next time
+      if (newStatus === 'served' || newStatus === 'skipped') {
+        if (queueParam) localStorage.removeItem(`last_token_${queueParam}`);
+      }
+
       prevStatusRef.current = newStatus;
       setError(null);
     } catch (err: any) {
