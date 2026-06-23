@@ -10,6 +10,11 @@ export const createQueue = async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
+    const parsedServiceTime = Number(averageServiceTime);
+    if (isNaN(parsedServiceTime) || parsedServiceTime <= 0) {
+      return res.status(400).json({ message: 'Average service time must be a positive number' });
+    }
+
     const codeNormalized = queueCode.trim().toLowerCase().replace(/\s+/g, '-');
     const queueExists = await Queue.findOne({ queueCode: codeNormalized });
 
@@ -26,7 +31,7 @@ export const createQueue = async (req: Request, res: Response) => {
     const queue = await Queue.create({
       queueName,
       queueCode: codeNormalized,
-      averageServiceTime: Number(averageServiceTime),
+      averageServiceTime: parsedServiceTime,
       tokenPrefix: prefix,
       lastTokenNumber: 0,
     });

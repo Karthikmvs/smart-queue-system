@@ -38,7 +38,8 @@ export const TrackQueue: React.FC = () => {
   const [data, setData] = useState<EntryDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
+  const [queueId, setQueueId] = useState<string | null>(null);
+
   // Audio state
   const prevStatusRef = useRef<'waiting' | 'called' | 'served' | 'skipped' | null>(null);
 
@@ -48,14 +49,15 @@ export const TrackQueue: React.FC = () => {
       const url = `/entries/track/${token}${queueParam ? `?queue=${queueParam}` : ''}`;
       const trackingData = await apiRequest(url);
       setData(trackingData);
-      
+      setQueueId((prev) => prev ?? trackingData.entry.queueId._id);
+
       const newStatus = trackingData.entry.status;
-      
+
       // Trigger notification/voice if state changes to 'called'
       if (prevStatusRef.current === 'waiting' && newStatus === 'called') {
         triggerCallAlert(trackingData.entry.token, trackingData.entry.customerName);
       }
-      
+
       prevStatusRef.current = newStatus;
       setError(null);
     } catch (err: any) {
@@ -74,13 +76,10 @@ export const TrackQueue: React.FC = () => {
     }
   }, [token, queueParam]);
 
-  // Handle live socket updates
+  // Handle live socket updates — depends on stable queueId, not the full data object
   useEffect(() => {
-    if (!data || !socket) return;
+    if (!queueId || !socket) return;
 
-    const queueId = data.entry.queueId._id;
-
-    // Join queue room
     socket.emit('join_queue', { queueId });
 
     const handleQueueUpdated = (payload: { queueId: string }) => {
@@ -95,7 +94,7 @@ export const TrackQueue: React.FC = () => {
       socket.emit('leave_queue', { queueId });
       socket.off('queue_updated', handleQueueUpdated);
     };
-  }, [data, socket]);
+  }, [queueId, socket]);
 
   const triggerCallAlert = (tokenNum: string, name: string) => {
     // 1. Play Audio chime / synthesis

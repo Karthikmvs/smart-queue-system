@@ -78,9 +78,10 @@ export const getEntryByToken = async (req: Request, res: Response) => {
         query.queueId = queue;
       } else {
         const foundQueue = await Queue.findOne({ queueCode: (queue as string).toLowerCase() });
-        if (foundQueue) {
-          query.queueId = foundQueue._id;
+        if (!foundQueue) {
+          return res.status(404).json({ message: 'Queue not found' });
         }
+        query.queueId = foundQueue._id;
       }
     }
 
@@ -158,9 +159,9 @@ export const updateEntryStatus = async (req: Request, res: Response) => {
     const io = req.app.get('io');
     if (io) {
       io.to(entry.queueId.toString()).emit('queue_updated', { queueId: entry.queueId });
-      
+
       if (status === 'called') {
-        io.emit('customer_called', {
+        io.to(entry.queueId.toString()).emit('customer_called', {
           queueId: entry.queueId,
           token: entry.token,
           customerName: entry.customerName,
@@ -205,7 +206,7 @@ export const callNext = async (req: Request, res: Response) => {
     // 4. Broadcast the update
     if (io) {
       io.to(queueId).emit('queue_updated', { queueId });
-      io.emit('customer_called', {
+      io.to(queueId).emit('customer_called', {
         queueId,
         token: nextEntry.token,
         customerName: nextEntry.customerName,

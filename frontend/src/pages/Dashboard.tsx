@@ -511,11 +511,14 @@ export const Dashboard: React.FC = () => {
                                 ) : (
                                   <button
                                     onClick={async () => {
-                                      // Call this specific customer: first mark current serving served
-                                      if (currentServingEntry) {
-                                        await handleUpdateStatus(currentServingEntry._id, 'served');
+                                      try {
+                                        if (currentServingEntry) {
+                                          await apiRequest(`/entries/${currentServingEntry._id}/status`, 'PATCH', { status: 'served' });
+                                        }
+                                        await apiRequest(`/entries/${entry._id}/status`, 'PATCH', { status: 'called' });
+                                      } catch (err) {
+                                        console.error('Error calling customer:', err);
                                       }
-                                      await apiRequest(`/entries/${entry._id}/status`, 'PATCH', { status: 'called' });
                                     }}
                                     className="px-3.5 py-1.5 rounded-xl bg-white/5 hover:bg-brand-500/20 border border-white/10 hover:border-brand-500/30 text-xs font-semibold text-gray-300 hover:text-white transition flex items-center gap-1"
                                   >
