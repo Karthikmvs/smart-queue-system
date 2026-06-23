@@ -13,7 +13,7 @@ export const joinQueue = async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Customer name is required' });
     }
 
-    const queue = await Queue.findOne({ queueCode: code.toLowerCase() });
+    const queue = await Queue.findOne({ queueCode: code.toUpperCase() });
     if (!queue) {
       return res.status(404).json({ message: 'Queue not found' });
     }
@@ -73,7 +73,7 @@ export const getEntryByToken = async (req: Request, res: Response) => {
       if (mongoose.Types.ObjectId.isValid(queue as string)) {
         query.queueId = queue;
       } else {
-        const foundQueue = await Queue.findOne({ queueCode: (queue as string).toLowerCase() });
+        const foundQueue = await Queue.findOne({ queueCode: (queue as string).toUpperCase() });
         if (!foundQueue) {
           return res.status(404).json({ message: 'Queue not found' });
         }

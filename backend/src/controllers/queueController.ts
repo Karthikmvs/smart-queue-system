@@ -87,7 +87,7 @@ export const getQueueByCode = async (req: AuthRequest, res: Response) => {
   const { code } = req.params;
 
   try {
-    const queue = await Queue.findOne({ queueCode: code.toLowerCase() });
+    const queue = await Queue.findOne({ queueCode: code.toUpperCase() });
 
     if (!queue) {
       return res.status(404).json({ message: 'Queue not found' });
